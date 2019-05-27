@@ -80,7 +80,7 @@ FOUNDATION_EXPORT NSString * AFQueryStringFromParameters(NSDictionary *parameter
 #pragma mark -
 
 /**
-
+ bylzh: only one,这是啥
  */
 typedef NS_ENUM(NSUInteger, AFHTTPRequestQueryStringSerializationStyle) {
     AFHTTPRequestQueryStringDefaultStyle = 0,
@@ -154,6 +154,7 @@ typedef NS_ENUM(NSUInteger, AFHTTPRequestQueryStringSerializationStyle) {
 
  @discussion To add or remove default request headers, use `setValue:forHTTPHeaderField:`.
  */
+// bylzh: 请求头是一个字典对象
 @property (readonly, nonatomic, strong) NSDictionary <NSString *, NSString *> *HTTPRequestHeaders;
 
 /**
@@ -199,6 +200,9 @@ forHTTPHeaderField:(NSString *)field;
 
 /**
  HTTP methods for which serialized requests will encode parameters as a query string. `GET`, `HEAD`, and `DELETE` by default.
+ 
+ bylzh:将GET/HEAD/DELETE请求的参数编码为query语句
+ translation: HTTP方法编码参数->为URI, 这里的编码其实是一种映射
  */
 @property (nonatomic, strong) NSSet <NSString *> *HTTPMethodsEncodingParametersInURI;
 
@@ -279,6 +283,10 @@ forHTTPHeaderField:(NSString *)field;
 
 /**
  The `AFMultipartFormData` protocol defines the methods supported by the parameter in the block argument of `AFHTTPRequestSerializer -multipartFormRequestWithMethod:URLString:parameters:constructingBodyWithBlock:`.
+ */
+/* bylzh:
+ AFMultipartFormData协议定义了（AFHTTPRequestSerializer的block变量中的参数）方法
+ 
  */
 @protocol AFMultipartFormData
 
