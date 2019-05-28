@@ -27,7 +27,9 @@
 #else
 #define NSFoundationVersionNumber_With_Fixed_5871104061079552_bug NSFoundationVersionNumber_iOS_8_0
 #endif
-
+/*
+    唯一·串行·队列
+ */
 static dispatch_queue_t url_session_manager_creation_queue() {
     static dispatch_queue_t af_url_session_manager_creation_queue;
     static dispatch_once_t onceToken;
@@ -37,14 +39,30 @@ static dispatch_queue_t url_session_manager_creation_queue() {
 
     return af_url_session_manager_creation_queue;
 }
-
+/* 静态方法 url_session_manager安全创建task
+ 
+   这个方法解决了NSURLSessionTask 的 taskIdentifier 在并发的情况下不唯一的bug，苹果在iOS8时解决了这个bug。
+ */
 static void url_session_manager_create_task_safely(dispatch_block_t _Nonnull block) {
     if (block != NULL) {
         if (NSFoundationVersionNumber < NSFoundationVersionNumber_With_Fixed_5871104061079552_bug) {
             // Fix of bug
             // Open Radar:http://openradar.appspot.com/radar?id=5871104061079552 (status: Fixed in iOS8)
             // Issue about:https://github.com/AFNetworking/AFNetworking/issues/2093
+            
+            //理解下，第一为什么用sync，因为是想要主线程等在这，等执行完，在返回，因为必须执行完dataTask才有数据，传值才有意义。
+            //第二，为什么要用串行队列，因为这块是为了防止ios8以下内部的dataTaskWithRequest是并发创建的，
+            //这样会导致taskIdentifiers这个属性值不唯一，因为后续要用taskIdentifiers来作为Key对应delegate。
+            
+            /*
+                disptach_sync主要用于代码上下文对时序有强要求的场景. 就是下一行代码的执行，依赖于上一行代码的结果
+                因为是想要主线程等在这，等执行完，在返回，因为必须执行完dataTask才有数据，传值才有意义。
+            
+                使用同步，唯一·串行队列，去执行block
+             */
             dispatch_sync(url_session_manager_creation_queue(), block);
+            
+            
         } else {
             block();
         }
@@ -512,26 +530,31 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
     if (!configuration) {
         configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
     }
-
+    // URLSession配置
     self.sessionConfiguration = configuration;
 
-    self.operationQueue = [[NSOperationQueue alloc] init];
-    self.operationQueue.maxConcurrentOperationCount = 1;
-
+    self.operationQueue = [[NSOperationQueue alloc] init];  // 初始化1个操作队列
+    self.operationQueue.maxConcurrentOperationCount = 1;    // 操作队列最大并发数=1，相当于串行队列
+    // 初始化response序列器
     self.responseSerializer = [AFJSONResponseSerializer serializer];
-
+    // 初始化安全策略
     self.securityPolicy = [AFSecurityPolicy defaultPolicy];
 
-#if !TARGET_OS_WATCH
+#if !TARGET_OS_WATCH   // 检测网络状况
     self.reachabilityManager = [AFNetworkReachabilityManager sharedManager];
 #endif
-
+    // 使用task.taskIdentifier为key，delegate为value，同时在读取和设置的时候采用加锁来保证安全。
     self.mutableTaskDelegatesKeyedByTaskIdentifier = [[NSMutableDictionary alloc] init];
-
+    // 初始化lock，用来干嘛?
     self.lock = [[NSLock alloc] init];
     self.lock.name = AFURLSessionManagerLockName;
 
     __weak typeof(self) weakSelf = self;
+    /*
+        1.这个方法的主要作用是获取session中所有的正在执行的tasks
+        2.为什么在initWithSessionConfiguration方法中执行self.session getTasksWithCompletionHandler? #3499 https://github.com/AFNetworking/AFNetworking/issues/3499
+        3.answer: 这是为了从后台恢复会话(APP被系统挂起的情况)   //这种情况并不好调试
+     */
     [self.session getTasksWithCompletionHandler:^(NSArray *dataTasks, NSArray *uploadTasks, NSArray *downloadTasks) {
         
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -557,9 +580,12 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
 
 #pragma mark -
 
+/*  TODO: 这里会死锁吗?
+    @synchronized，代表这个方法加锁, 相当于不管哪一个线程（例如线程A），运行到这个方法时,都要检查有没有其它线程例如B正在用这个方法，有的话要等正在使用synchronized方法的线程B运行完这个方法后再运行此线程A,没有的话,直接运行==>避免重复sessionWithConfiguration:
+    @synchronized是几种iOS多线程同步机制中最慢的一个，同时也是最方便的一个。
+*/
 - (NSURLSession *)session {
-    
-    @synchronized (self) {
+     @synchronized (self) {
         if (!_session) {
             _session = [NSURLSession sessionWithConfiguration:self.sessionConfiguration delegate:self delegateQueue:self.operationQueue];
         }

@@ -70,7 +70,7 @@
     if (!self) {
         return nil;
     }
-
+    // TODO: 不知道干嘛
     // Ensure terminal slash for baseURL path, so that NSURL +URLWithString:relativeToURL: works as expected
     if ([[url path] length] > 0 && ![[url absoluteString] hasSuffix:@"/"]) {
         url = [url URLByAppendingPathComponent:@""];
@@ -241,20 +241,46 @@
                        success:(void (^)(NSURLSessionDataTask * _Nonnull, id _Nullable))success failure:(void (^)(NSURLSessionDataTask * _Nullable, NSError * _Nonnull))failure
 {
     NSError *serializationError = nil;
+    /*
+        1.请求序列化器requestSerializer，生成了本次网络请求的NSMutableURLRequest *request
+        2.序列化发生在
+     
+     */
     NSMutableURLRequest *request = [self.requestSerializer multipartFormRequestWithMethod:@"POST" URLString:[[NSURL URLWithString:URLString relativeToURL:self.baseURL] absoluteString] parameters:parameters constructingBodyWithBlock:block error:&serializationError];
+    
+    // 添加request中指定的headerField，一般设置为nil
     for (NSString *headerField in headers.keyEnumerator) {
         [request addValue:headers[headerField] forHTTPHeaderField:headerField];
     }
+    
+    /* 序列化错误的处理
+        如果failure block存在，异步执行failure.
+        如果serializationError，NSURLSessionDataTask并不会真正地生成，所以callback nil ; return 也是nil
+        self.completionQueue在哪里指定呢？
+     */
     if (serializationError) {
         if (failure) {
             dispatch_async(self.completionQueue ?: dispatch_get_main_queue(), ^{
                 failure(nil, serializationError);
             });
         }
-        
+        // error时的task为nil
         return nil;
     }
+    /*  __block :
+     1.在block中无法修改{*非静态局部变量*}的值，也知道解决方案是用__block来修饰一下变量。
+     2.静态局部变量和非静态局部变量的区别了，静态变量存在于应用程序的整个生命周期，而非静态局部变量
+     
+     3.通过clang 重写源代码可以发现用__block修饰后，原来的变量已经被替换成一个与之相对应的struct变量（新变量）
+       结构体中有一个__forwarding指针，初始化时此指针指向转换后变量本身；结构体中也有一个原变量一样类型的变量。
+     
+     :=>所以最终修改的其实是结构体中原变量同类型变量.而这个变量明显已经不属于block的外部变量了，所以是在block中是可以修改的。
+     TODO:// later
+     */
     
+    /*
+        POST请求其实就是一个upload Stream的任务
+     */
     __block NSURLSessionDataTask *task = [self uploadTaskWithStreamedRequest:request progress:uploadProgress completionHandler:^(NSURLResponse * __unused response, id responseObject, NSError *error) {
         if (error) {
             if (failure) {
@@ -267,9 +293,9 @@
         }
     }];
     
-    [task resume];
+    [task resume]; // 启动任务
     
-    return task;
+    return task; // return已经启动的task
 }
 
 - (NSURLSessionDataTask *)PUT:(NSString *)URLString

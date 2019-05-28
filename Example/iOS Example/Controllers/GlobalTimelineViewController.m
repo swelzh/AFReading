@@ -23,6 +23,7 @@
 #import "GlobalTimelineViewController.h"
 
 #import "Post.h"
+#import "AFAppDotNetAPIClient.h"
 
 #import "PostTableViewCell.h"
 
@@ -37,14 +38,32 @@
 - (void)reload:(__unused id)sender {
     self.navigationItem.rightBarButtonItem.enabled = NO;
 
-    NSURLSessionTask *task = [Post globalTimelinePostsWithBlock:^(NSArray *posts, NSError *error) {
-        if (!error) {
-            self.posts = posts;
-            [self.tableView reloadData];
-        }
+//    NSURLSessionTask *task = [Post globalTimelinePostsWithBlock:^(NSArray *posts, NSError *error) {
+//        if (!error) {
+//            self.posts = posts;
+//            [self.tableView reloadData];
+//        }
+//    }];
+//
+//    [self.refreshControl setRefreshingWithStateOfTask:task];
+    
+    NSDictionary *p =@{
+                       @"a":@{
+                               @"x":@"y",
+                               @"q":@"s"
+                               },
+                       @"b":@[
+                               @"m",@"n"
+                               ]
+                       };
+    [[AFAppDotNetAPIClient sharedClient] POST:@"" parameters:p headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
+        NSLog(@"encoding后的formData == %@",formData);
+    } progress:nil success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
+        
+    } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
+        
     }];
-
-    [self.refreshControl setRefreshingWithStateOfTask:task];
+  
 }
 
 #pragma mark - UIViewController

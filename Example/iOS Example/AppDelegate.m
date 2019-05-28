@@ -29,9 +29,18 @@
 
 - (BOOL)application:(__unused UIApplication *)application didFinishLaunchingWithOptions:(__unused NSDictionary *)launchOptions
 {
+//    NSURLCache *URLCache = [NSURLCache sharedURLCache];
+    
     NSURLCache *URLCache = [[NSURLCache alloc] initWithMemoryCapacity:4 * 1024 * 1024 diskCapacity:20 * 1024 * 1024 diskPath:nil];
+    /*
+     @property sharedURLCache是一个默认值,
+     URLCache与默认值保持一致，是否有设置必要
+     */
     [NSURLCache setSharedURLCache:URLCache];
     
+    /*
+     not work in iPhoneX (iPhoneXR, iPhoneXs, iPhoneXs Max)  
+     */
     [[AFNetworkActivityIndicatorManager sharedManager] setEnabled:YES];
     
     UITableViewController *viewController = [[GlobalTimelineViewController alloc] initWithStyle:UITableViewStylePlain];
@@ -42,6 +51,9 @@
     self.window.backgroundColor = [UIColor whiteColor];
     self.window.rootViewController = self.navigationController;
     [self.window makeKeyAndVisible];
+    
+    NSString *s = [NSString stringWithFormat:@"Boundary+%08X,%08X", arc4random(), arc4random()];
+    
     
     return YES;
 }

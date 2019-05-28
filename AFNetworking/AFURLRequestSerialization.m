@@ -643,7 +643,7 @@ static NSString * const kAFMultipartFormCRLF = @"\r\n";
 static inline NSString * AFMultipartFormInitialBoundary(NSString *boundary) {
     return [NSString stringWithFormat:@"--%@%@", boundary, kAFMultipartFormCRLF];
 }
-
+// Encapsulation 封装
 static inline NSString * AFMultipartFormEncapsulationBoundary(NSString *boundary) {
     return [NSString stringWithFormat:@"%@--%@%@", kAFMultipartFormCRLF, boundary, kAFMultipartFormCRLF];
 }
@@ -721,7 +721,7 @@ NSTimeInterval const kAFUploadStream3GSuggestedDelay = 0.2;
 
     self.request = urlRequest;
     self.stringEncoding = encoding;
-    self.boundary = AFCreateMultipartFormBoundary(); //数据边界 @"Boundary+FA1BB1079C1E67A3"
+    self.boundary = AFCreateMultipartFormBoundary(); //数据边界 @"Boundary+FA1BB1079C1E67A3", 每个formData的boundary都是随机不同的
     // lzh:
     self.bodyStream = [[AFMultipartBodyStream alloc] initWithStringEncoding:encoding];
 
@@ -889,9 +889,25 @@ NSTimeInterval const kAFUploadStream3GSuggestedDelay = 0.2;
 
     // Reset the initial and final boundaries to ensure correct Content-Length
     [self.bodyStream setInitialAndFinalBoundaries];
+    /*
+     lzh:bodyStream增加了冗余项目。
+     猜测setHTTPBodyStream后面的dataEncoding或者服务器端的read data只会取出对应字段的内容
+     */
     [self.request setHTTPBodyStream:self.bodyStream];
-
-    [self.request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", self.boundary] forHTTPHeaderField:@"Content-Type"];
+    
+    /*
+        Content-Type指定以后，还需要指定本次请求对应的boundary是什么
+     */
+    [self.request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", self.boundary] forHTTPHeaderField:@"Content-Type"];  // form-data需要boundary
+    
+    /* 除非使用了分块编码(Transfer-Encoding:chunked)，主要用在kee-alive长连接中，
+       否则Content-Length首部就是带有实体主体的报文必须使用的。
+       使用Content-Length首部是为了能够检测出服务器崩溃而导致的报文截尾，并对共享持久连接的多个报文进行正确分段.
+       Content-Length如果存在并且有效的话，则必须和消息内容的传输长度完全一致。
+      （经过测试，如果过短则会截断，过长则会导致超时。）
+     
+        这里是bodyStream的contentLength，not whole request
+     */
     [self.request setValue:[NSString stringWithFormat:@"%llu", [self.bodyStream contentLength]] forHTTPHeaderField:@"Content-Length"];
 
     return self.request;
@@ -934,7 +950,7 @@ NSTimeInterval const kAFUploadStream3GSuggestedDelay = 0.2;
 
     return self;
 }
-//  设置网络请求的Initial和Final的Boundary
+//  设置网络请求的Initial和Final的Boundary属性，具体值未设置
 - (void)setInitialAndFinalBoundaries {
     if ([self.HTTPBodyParts count] > 0) {
         for (AFHTTPBodyPart *bodyPart in self.HTTPBodyParts) {
@@ -1132,7 +1148,7 @@ typedef enum {
 
     return _inputStream;
 }
-
+//  Headers和body是分开的    "Content-Disposition" = "form-data; name=\"a\"";
 - (NSString *)stringForHeaders {
     NSMutableString *headerString = [NSMutableString string];
     for (NSString *field in [self.headers allKeys]) {
@@ -1145,15 +1161,15 @@ typedef enum {
 
 - (unsigned long long)contentLength {
     unsigned long long length = 0;
-
+    //封装”boundary“ data  （区分AFHTTPBodyPart是hasInitialBoundary，或者是Final ）
     NSData *encapsulationBoundaryData = [([self hasInitialBoundary] ? AFMultipartFormInitialBoundary(self.boundary) : AFMultipartFormEncapsulationBoundary(self.boundary)) dataUsingEncoding:self.stringEncoding];
-    length += [encapsulationBoundaryData length];
-
+    length += [encapsulationBoundaryData length]; // boundary length
+    // header data length
     NSData *headersData = [[self stringForHeaders] dataUsingEncoding:self.stringEncoding];
     length += [headersData length];
-
+    // body data length
     length += _bodyContentLength;
-
+    // closing boundary
     NSData *closingBoundaryData = ([self hasFinalBoundary] ? [AFMultipartFormFinalBoundary(self.boundary) dataUsingEncoding:self.stringEncoding] : [NSData data]);
     length += [closingBoundaryData length];
 
