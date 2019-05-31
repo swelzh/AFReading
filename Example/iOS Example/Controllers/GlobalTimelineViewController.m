@@ -45,7 +45,6 @@
 //        }
 //    }];
 //
-//    [self.refreshControl setRefreshingWithStateOfTask:task];
     
     NSDictionary *p =@{
                        @"a":@{
@@ -56,14 +55,18 @@
                                @"m",@"n"
                                ]
                        };
-    [[AFAppDotNetAPIClient sharedClient] POST:@"" parameters:p headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
+   NSURLSessionTask *task =  [[AFAppDotNetAPIClient sharedClient] POST:@"" parameters:p headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
         NSLog(@"encoding后的formData == %@",formData);
-    } progress:nil success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
+    } progress:^(NSProgress * _Nonnull uploadProgress) {
+        NSLog(@"uploadProgress== %@",uploadProgress);
+    } success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
         
     } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
         
     }];
-  
+    
+    
+    [self.refreshControl setRefreshingWithStateOfTask:task];
 }
 
 #pragma mark - UIViewController

@@ -50,14 +50,8 @@ static void url_session_manager_create_task_safely(dispatch_block_t _Nonnull blo
             // Open Radar:http://openradar.appspot.com/radar?id=5871104061079552 (status: Fixed in iOS8)
             // Issue about:https://github.com/AFNetworking/AFNetworking/issues/2093
             
-            //理解下，第一为什么用sync，因为是想要主线程等在这，等执行完，在返回，因为必须执行完dataTask才有数据，传值才有意义。
-            //第二，为什么要用串行队列，因为这块是为了防止ios8以下内部的dataTaskWithRequest是并发创建的，
-            //这样会导致taskIdentifiers这个属性值不唯一，因为后续要用taskIdentifiers来作为Key对应delegate。
-            
-            /*
+            /*  为什么要用串行队列，因为这块是为了防止ios8以下内部的dataTaskWithRequest是并发创建的，这样会导致taskIdentifiers这个属性值不唯一，因为后续要用taskIdentifiers来作为Key对应delegate。
                 disptach_sync主要用于代码上下文对时序有强要求的场景. 就是下一行代码的执行，依赖于上一行代码的结果
-                因为是想要主线程等在这，等执行完，在返回，因为必须执行完dataTask才有数据，传值才有意义。
-            
                 使用同步，唯一·串行队列，去执行block
              */
             dispatch_sync(url_session_manager_creation_queue(), block);
@@ -138,11 +132,14 @@ typedef void (^AFURLSessionTaskCompletionHandler)(NSURLResponse *response, id re
 @interface AFURLSessionManagerTaskDelegate : NSObject <NSURLSessionTaskDelegate, NSURLSessionDataDelegate, NSURLSessionDownloadDelegate>
 - (instancetype)initWithTask:(NSURLSessionTask *)task;
 @property (nonatomic, weak) AFURLSessionManager *manager;
-@property (nonatomic, strong) NSMutableData *mutableData;
+@property (nonatomic, strong) NSMutableData *mutableData; // 用于拼接recieved data 「」
 @property (nonatomic, strong) NSProgress *uploadProgress;
 @property (nonatomic, strong) NSProgress *downloadProgress;
 @property (nonatomic, copy) NSURL *downloadFileURL;
 #if AF_CAN_INCLUDE_SESSION_TASK_METRICS
+/*
+    NSURLSessionTaskMetrics  metrics·度量/指标
+ */
 @property (nonatomic, strong) NSURLSessionTaskMetrics *sessionTaskMetrics;
 #endif
 @property (nonatomic, copy) AFURLSessionDownloadTaskDidFinishDownloadingBlock downloadTaskDidFinishDownloading;
@@ -158,7 +155,9 @@ typedef void (^AFURLSessionTaskCompletionHandler)(NSURLResponse *response, id re
     if (!self) {
         return nil;
     }
-    
+    /*
+        NSURLSessionTask的delegate任务，由一个第三方对象来管理（作为统一接口对象）
+     */
     _mutableData = [NSMutableData data];
     _uploadProgress = [[NSProgress alloc] initWithParent:nil userInfo:nil];
     _downloadProgress = [[NSProgress alloc] initWithParent:nil userInfo:nil];
@@ -185,7 +184,7 @@ typedef void (^AFURLSessionTaskCompletionHandler)(NSURLResponse *response, id re
                 [weakTask resume];
             };
         }
-        
+        //fractionCompleted 已完成的%
         [progress addObserver:self
                    forKeyPath:NSStringFromSelector(@selector(fractionCompleted))
                       options:NSKeyValueObservingOptionNew
@@ -220,7 +219,7 @@ typedef void (^AFURLSessionTaskCompletionHandler)(NSURLResponse *response, id re
               task:(NSURLSessionTask *)task
 didCompleteWithError:(NSError *)error
 {
-    __strong AFURLSessionManager *manager = self.manager;
+    __strong AFURLSessionManager *manager = self.manager;  // __strong的意义是?
 
     __block id responseObject = nil;
 
@@ -283,13 +282,23 @@ didCompleteWithError:(NSError *)error
                     self.completionHandler(task.response, responseObject, serializationError);
                 }
 
-                dispatch_async(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{  // 转发通知
                     [[NSNotificationCenter defaultCenter] postNotificationName:AFNetworkingTaskDidCompleteNotification object:task userInfo:userInfo];
                 });
             });
         });
     }
 }
+
+/*  userInfo收集了什么信息:
+ userInfo[AFNetworkingTaskDidCompleteResponseSerializerKey] = manager.responseSerializer;
+ userInfo[AFNetworkingTaskDidCompleteSessionTaskMetrics] = self.sessionTaskMetrics;
+ userInfo[AFNetworkingTaskDidCompleteAssetPathKey] = self.downloadFileURL;
+ userInfo[AFNetworkingTaskDidCompleteResponseDataKey] = data;
+ userInfo[AFNetworkingTaskDidCompleteErrorKey] = error;
+ userInfo[AFNetworkingTaskDidCompleteSerializedResponseKey] = responseObject;
+ userInfo[AFNetworkingTaskDidCompleteErrorKey] = serializationError;
+ */
 
 #if AF_CAN_INCLUDE_SESSION_TASK_METRICS
 - (void)URLSession:(NSURLSession *)session
@@ -370,12 +379,13 @@ didFinishDownloadingToURL:(NSURL *)location
  *  - https://github.com/AFNetworking/AFNetworking/pull/2702
  */
 
+//交换Class的两个Method，这里不是IMP
 static inline void af_swizzleSelector(Class theClass, SEL originalSelector, SEL swizzledSelector) {
     Method originalMethod = class_getInstanceMethod(theClass, originalSelector);
     Method swizzledMethod = class_getInstanceMethod(theClass, swizzledSelector);
     method_exchangeImplementations(originalMethod, swizzledMethod);
 }
-
+// 静态内联函数 ·NSURLSession集群自类的 Class add Method (Method从)
 static inline BOOL af_addMethod(Class theClass, SEL selector, Method method) {
     return class_addMethod(theClass, selector,  method_getImplementation(method),  method_getTypeEncoding(method));
 }
@@ -396,6 +406,33 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
      */
 
     if (NSClassFromString(@"NSURLSessionTask")) {
+        /**
+                 iOS 7和iOS 8在NSURLSessionTask实现方面有所不同，这使得下一部分代码有点棘手。
+                 已经构建了许多单元测试来验证这种行为的可能性。
+                 以下是我们所知道的：
+                     -  NSURLSessionTasks是使用类集群实现的，这意味着您从API请求的类实际上不是您将获得的类的类型。
+                     - 简单地引用`[NSURLSessionTask class]`将不起作用。你需要让一个`NSURLSession`来实际创建一个对象，并从那里获取类。
+                     - 在iOS 7上，`localDataTask`是一个`__NSCFLocalDataTask`，它继承自`__NSCFLocalSessionTask`，它继承自`__NSCFURLSessionTask`。
+                     - 在iOS 8上，`localDataTask`是一个`__NSCFLocalDataTask`，它继承自`__NSCFLocalSessionTask`，它继承自`NSURLSessionTask`。
+                     - 在iOS 7上，`__ NSCFLocalSessionTask`和`__NSCFURLSessionTask`是唯一具有自己的`resume`和`suspend`实现的两个类，而__NSCFLocalSessionTask`则不会调用超级。这意味着两个类都需要调整。
+                     - 在iOS 8上，`NSURLSessionTask`是唯一实现`resume`和`suspend`的类。这意味着这是唯一需要调整的类。
+                     - 因为每个iOS版本的类层次结构都不涉及`NSURLSessionTask`，所以更容易将混合方法添加到虚拟类并在那里管理它们。
+                
+                 一些假设：
+                     - 没有实现`resume`或`suspend`调用super。如果要在未来版本的iOS中进行更改，我们需要处理它。
+                     - 没有后台任务类覆盖`resume`或`suspend`
+                 
+                 目前的解决方案：
+                    1）通过向数据任务询问“NSURLSession”实例来获取“__NSCFLocalDataTask”的实例。
+                    2）抓住指向`af_resume`的原始实现的指针
+                    3）检查当前类是否具有resume的实现。如果是，请继续执行步骤4。
+                    4）抓住当前班级的父类。
+                    5）将当前类的指针抓取到`resume`的当前实现。
+                    6）将超类的指针抓取到`resume`的当前实现。
+                    7）如果`resume`的当前类实现不等于`resume`的超类实现并且`resume`的当前实现不等于`af_resume`的原始实现，那么swizzle方法
+                    8）将当前类设置为超类，并重复步骤3-8
+         */
+
         /**
          iOS 7 and iOS 8 differ in NSURLSessionTask implementation, which makes the next bit of code a bit tricky.
          Many Unit Tests have been built to validate as much of this behavior has possible.
@@ -431,26 +468,50 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
         IMP originalAFResumeIMP = method_getImplementation(class_getInstanceMethod([self class], @selector(af_resume)));
         Class currentClass = [localDataTask class];
         
+        /*
+         currentClass包括以下类:
+         __NSCFLocalDataTask`==>`__NSCFLocalSessionTask ==> `__NSCFURLSessionTask`==>`NSURLSessionTask`
+         */
         while (class_getInstanceMethod(currentClass, @selector(resume))) {
             Class superClass = [currentClass superclass];
             IMP classResumeIMP = method_getImplementation(class_getInstanceMethod(currentClass, @selector(resume)));
             IMP superclassResumeIMP = method_getImplementation(class_getInstanceMethod(superClass, @selector(resume)));
+            /*
+               __NSCFURLSessionTask !=  NSURLSessionTask
+                (IMP) classResumeIMP = 0x000000010bf461e6 (CFNetwork`-[__NSCFURLSessionTask resume]) !=
+                (IMP) superclassResumeIMP = 0x000000010bf44541 (CFNetwork`-[NSURLSessionTask resume])
+             
+             Last://
+             (IMP) classResumeIMP = 0x0000000105485541 (CFNetwork`-[NSURLSessionTask resume])!=
+             <nil>
+             
+             (IMP) originalAFResumeIMP = 0x0000000102dabb30 (AFNetworking`-[_AFURLSessionTaskSwizzling af_resume] at AFURLSessionManager.m:497)!=
+             (IMP) classResumeIMP = 0x0000000105485541 (CFNetwork`-[NSURLSessionTask resume])!=
+             */
             if (classResumeIMP != superclassResumeIMP &&
-                originalAFResumeIMP != classResumeIMP) {
-                [self swizzleResumeAndSuspendMethodForClass:currentClass];
+                originalAFResumeIMP != classResumeIMP) {  //  __NSCFURLSessionTask ==> NSURLSessionTask
+                [self swizzleResumeAndSuspendMethodForClass:currentClass]; // 替换掉父类的resume方法
             }
             currentClass = [currentClass superclass];
         }
         
-        [localDataTask cancel];
-        [session finishTasksAndInvalidate];
+        [localDataTask cancel]; // 取消掉这个locaDataTask
+        [session finishTasksAndInvalidate]; // session 完成task并且将自身至为无效
     }
 }
 
+/*
+    为什么要交换resume和suspend这两个方法? 这个方法里面的改动显示:
+ 
+    使用runtime,交换_AFURLSessionTaskSwizzling与 sessionClass
+    1.获取本类的方法 class_getInstanceMethod
+    2.给目标类af_addMethod , SURLSession的集群子类
+    3.交换目标类的resume和af_resume的方法
+ */
 + (void)swizzleResumeAndSuspendMethodForClass:(Class)theClass {
     Method afResumeMethod = class_getInstanceMethod(self, @selector(af_resume));
     Method afSuspendMethod = class_getInstanceMethod(self, @selector(af_suspend));
-
+   
     if (af_addMethod(theClass, @selector(af_resume), afResumeMethod)) {
         af_swizzleSelector(theClass, @selector(resume), @selector(af_resume));
     }
@@ -467,11 +528,16 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
 
 - (void)af_resume {
     NSAssert([self respondsToSelector:@selector(state)], @"Does not respond to state");
-    NSURLSessionTaskState state = [self state];
+    /*
+        这里的self是哪个类的实例？调试发现是__NSCFLocalUploadTask（POST请求）. self是一个指针
+        so,需要注意的是af_resume的调用方式__NSCFLocalUploadTask的instance
+        [self state]也是调用了__NSCFLocalUploadTask（或者其父类）的state方法
+     */
+    NSURLSessionTaskState state = [self state];   // 初始化状态的statechyu处于挂起的状态，state==NSURLSessionTaskStateSuspended
     [self af_resume];
     
     if (state != NSURLSessionTaskStateRunning) {
-        [[NSNotificationCenter defaultCenter] postNotificationName:AFNSURLSessionTaskDidResumeNotification object:self];
+        [[NSNotificationCenter defaultCenter] postNotificationName:AFNSURLSessionTaskDidResumeNotification object:self]; //这里的self是哪个类的实例
     }
 }
 
@@ -480,7 +546,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
     NSURLSessionTaskState state = [self state];
     [self af_suspend];
     
-    if (state != NSURLSessionTaskStateSuspended) {
+    if (state != NSURLSessionTaskStateSuspended) {  // state == NSURLSessionTaskStateCanceling 所以下面这段代码是必定执行的
         [[NSNotificationCenter defaultCenter] postNotificationName:AFNSURLSessionTaskDidSuspendNotification object:self];
     }
 }
@@ -602,9 +668,26 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
 
 - (void)taskDidResume:(NSNotification *)notification {
     NSURLSessionTask *task = notification.object;
+    /*
+     iOS8.0 and above:
+        NSURLSessionTask的property包含了taskDescription，respondsToSelector也必定为true
+     猜测iOS8.0以前: "某些类可能没有改property"，遗憾没有Google到相关证据
+     */
     if ([task respondsToSelector:@selector(taskDescription)]) {
+        //这个判断的原因是？因为这个instance可能监听到其他instance发送的notification，so需要确定是己方啊
         if ([task.taskDescription isEqualToString:self.taskDescriptionForSessionTasks]) {
-            dispatch_async(dispatch_get_main_queue(), ^{
+            /*
+                ==> // 将NSURLSessionTask，转发为NetworkingTask的通知
+                将通知redirect到合适的线程,  them to the appropriate thread.
+             
+                1. [NSNotificationCenter defaultCenter] observer的方法的执行线程，与post所在的线程是一致的！
+                2. 结论:这是一种略微保险，但并不充分的做法。 原因如下:
+                    2.1 因此如果observer的方法需要主线程（eg:UI），那么postNotification可以放在主线程中去执行
+                    2.2 但是保守起见,observer的方法需要放在dispatch_async(dispatch_get_main_queue(), ^{ });  事实上af_beginRefreshing就是这么做的
+                3. 替代方法: observer可以使用addObserverForName:object:queue:usingBlock:方法，指定被执行方法的线程([NSOperationQueue mainQueue]).
+                   该方法出现iOS4.0，但是注意该方法也需要在dealloc时removeObserver
+             */
+            dispatch_async(dispatch_get_main_queue(), ^{   //
                 [[NSNotificationCenter defaultCenter] postNotificationName:AFNetworkingTaskDidResumeNotification object:task];
             });
         }
@@ -640,7 +723,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
 {
     NSParameterAssert(task);
     NSParameterAssert(delegate);
-
+    /* why lock here*/
     [self.lock lock];
     self.mutableTaskDelegatesKeyedByTaskIdentifier[@(task.taskIdentifier)] = delegate;
     [self addNotificationObserverForTask:task];
@@ -775,7 +858,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
 }
 
 #pragma mark -
-- (void)addNotificationObserverForTask:(NSURLSessionTask *)task {
+- (void)addNotificationObserverForTask:(NSURLSessionTask *)task { // Note: NSURLSessionTask's DidResume/DidSuspend Notification
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(taskDidResume:) name:AFNSURLSessionTaskDidResumeNotification object:task];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(taskDidSuspend:) name:AFNSURLSessionTaskDidSuspendNotification object:task];
 }
@@ -856,6 +939,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
                                         completionHandler:(void (^)(NSURLResponse *response, id responseObject, NSError *error))completionHandler
 {
     __block NSURLSessionUploadTask *uploadTask = nil;
+    // 确保串行地去执行 uploadTaskWithStreamedRequest:方法
     url_session_manager_create_task_safely(^{
         uploadTask = [self.session uploadTaskWithStreamedRequest:request];
     });
@@ -1137,16 +1221,16 @@ totalBytesExpectedToSend:(int64_t)totalBytesExpectedToSend
         self.taskDidSendBodyData(session, task, bytesSent, totalBytesSent, totalUnitCount);
     }
 }
-
+/* 网络请求返回的NSURLSessionTaskDelegate方法, */
 - (void)URLSession:(NSURLSession *)session
               task:(NSURLSessionTask *)task
 didCompleteWithError:(NSError *)error
-{
+{   // 获取到AFURLSessionManager存下的delegate in a dictionary
     AFURLSessionManagerTaskDelegate *delegate = [self delegateForTask:task];
 
     // delegate may be nil when completing a task in the background
     if (delegate) {
-        [delegate URLSession:session task:task didCompleteWithError:error];
+        [delegate URLSession:session task:task didCompleteWithError:error]; // why?我的编辑器颜色显示这个是系统方法(默认蓝色)
 
         [self removeDelegateForTask:task];
     }

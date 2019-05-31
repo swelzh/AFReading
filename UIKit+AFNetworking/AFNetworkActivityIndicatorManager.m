@@ -155,8 +155,9 @@ typedef void (^AFNetworkActivityActionBlock)(BOOL networkActivityIndicatorVisibl
         [self updateCurrentStateForNetworkActivityChange];
     });
 }
-
+/*这里还是在主线程调用，是因为发送通知的一方，在main thread调用的结果. 证据1：现象; 证据2: */
 - (void)networkRequestDidStart:(NSNotification *)notification {
+    NSLog(@"%@",[NSThread currentThread]);
     if ([AFNetworkRequestFromNotification(notification) URL]) {
         [self incrementActivityCount];
     }

@@ -243,7 +243,8 @@
     NSError *serializationError = nil;
     /*
         1.请求序列化器requestSerializer，生成了本次网络请求的NSMutableURLRequest *request
-        2.序列化发生在
+        2.为什么使用requestSerializer来生成request?
+        3.requestSerializer和request的关系是什么？
      
      */
     NSMutableURLRequest *request = [self.requestSerializer multipartFormRequestWithMethod:@"POST" URLString:[[NSURL URLWithString:URLString relativeToURL:self.baseURL] absoluteString] parameters:parameters constructingBodyWithBlock:block error:&serializationError];
@@ -281,6 +282,7 @@
     /*
         POST请求其实就是一个upload Stream的任务
      */
+    
     __block NSURLSessionDataTask *task = [self uploadTaskWithStreamedRequest:request progress:uploadProgress completionHandler:^(NSURLResponse * __unused response, id responseObject, NSError *error) {
         if (error) {
             if (failure) {
