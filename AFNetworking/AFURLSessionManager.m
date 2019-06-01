@@ -214,7 +214,7 @@ typedef void (^AFURLSessionTaskCompletionHandler)(NSURLResponse *response, id re
 }
 
 #pragma mark - NSURLSessionTaskDelegate
-
+/*成功和失败都可能走这个方法 */
 - (void)URLSession:(__unused NSURLSession *)session
               task:(NSURLSessionTask *)task
 didCompleteWithError:(NSError *)error
@@ -509,7 +509,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
     3.交换目标类的resume和af_resume的方法
  */
 + (void)swizzleResumeAndSuspendMethodForClass:(Class)theClass {
-    Method afResumeMethod = class_getInstanceMethod(self, @selector(af_resume));
+    Method afResumeMethod = class_getInstanceMethod(self, @selector(af_resume));  // 这里的self是_AFURLSessionTaskSwizzling找个类
     Method afSuspendMethod = class_getInstanceMethod(self, @selector(af_suspend));
    
     if (af_addMethod(theClass, @selector(af_resume), afResumeMethod)) {
@@ -520,9 +520,9 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
         af_swizzleSelector(theClass, @selector(suspend), @selector(af_suspend));
     }
 }
-
+// 这个方法比较取巧，只是为了使[self state]编译通过； 实际上该方法不能被调用
 - (NSURLSessionTaskState)state {
-    NSAssert(NO, @"State method should never be called in the actual dummy class");
+    NSAssert(NO, @"State method should never be called in the actual dummy class"); // 永远不应该在实际的虚拟类中调用State方法
     return NSURLSessionTaskStateCanceling;
 }
 
@@ -536,7 +536,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
     NSURLSessionTaskState state = [self state];   // 初始化状态的statechyu处于挂起的状态，state==NSURLSessionTaskStateSuspended
     [self af_resume];
     
-    if (state != NSURLSessionTaskStateRunning) {
+    if (state != NSURLSessionTaskStateRunning) { // why resume的时候可能存在NSURLSessionTaskStateRunning？ 这里是确认状态翻转: notRuning => running 才确认为DidResume
         [[NSNotificationCenter defaultCenter] postNotificationName:AFNSURLSessionTaskDidResumeNotification object:self]; //这里的self是哪个类的实例
     }
 }
@@ -546,7 +546,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
     NSURLSessionTaskState state = [self state];
     [self af_suspend];
     
-    if (state != NSURLSessionTaskStateSuspended) {  // state == NSURLSessionTaskStateCanceling 所以下面这段代码是必定执行的
+    if (state != NSURLSessionTaskStateSuspended) { // 这里是确认状态翻转: notSuspended => suspended 才确认为Suspended
         [[NSNotificationCenter defaultCenter] postNotificationName:AFNSURLSessionTaskDidSuspendNotification object:self];
     }
 }
@@ -649,6 +649,8 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
 /*  TODO: 这里会死锁吗?
     @synchronized，代表这个方法加锁, 相当于不管哪一个线程（例如线程A），运行到这个方法时,都要检查有没有其它线程例如B正在用这个方法，有的话要等正在使用synchronized方法的线程B运行完这个方法后再运行此线程A,没有的话,直接运行==>避免重复sessionWithConfiguration:
     @synchronized是几种iOS多线程同步机制中最慢的一个，同时也是最方便的一个。
+ 
+    NOTE:这里设置了delegate，找了好久找不到🤦‍♂️
 */
 - (NSURLSession *)session {
      @synchronized (self) {
@@ -1086,7 +1088,7 @@ static NSString * const AFNSURLSessionTaskDidSuspendNotification = @"com.alamofi
     }
 #endif
 
-    return [[self class] instancesRespondToSelector:selector];
+    return [[self class] instancesRespondToSelector:selector];  // 这是干嘛的？
 }
 
 #pragma mark - NSURLSessionDelegate
@@ -1230,7 +1232,7 @@ didCompleteWithError:(NSError *)error
 
     // delegate may be nil when completing a task in the background
     if (delegate) {
-        [delegate URLSession:session task:task didCompleteWithError:error]; // why?我的编辑器颜色显示这个是系统方法(默认蓝色)
+        [delegate URLSession:session task:task didCompleteWithError:error];
 
         [self removeDelegateForTask:task];
     }
