@@ -248,6 +248,7 @@ didCompleteWithError:(NSError *)error
         userInfo[AFNetworkingTaskDidCompleteResponseDataKey] = data;
     }
 
+    
     if (error) {
         userInfo[AFNetworkingTaskDidCompleteErrorKey] = error;
 
